@@ -1,0 +1,58 @@
+Rectangle as root {
+    
+    color: #white
+    
+    alias auth
+    
+    event logout 
+    on logout {
+        //data.clear()
+    }
+    
+    Apple.NavigationBar{
+        anchor top = parent.safeAreaTop
+        anchor boundsX
+
+        title: "Welcome"
+    }
+    Text as memberid {
+        y: 116
+        x: 37
+        text: "MembershipID: "
+    }
+    Text as membertype{
+        y: 159
+        x: 37
+        text: "MembershipType: "
+    }
+    Text as displayname{
+        x: 37
+        y: 202
+        text: "Displayname:  "
+    }
+
+
+
+    
+    
+}
+
+on @Authorised entered {
+    Json data = await auth.getPlayer()
+    memberid.text.append(auth.bungieMembershipId + " OR " + auth.membershipId)
+    membertype.text.append(String(auth.membershipType))
+    displayname.text.append(String(data["Response"].bungieNetUser.displayName))
+
+   
+    System.log(data)
+    System.log(data["Response"].bungieNetUser.displayName)
+}
+
+on @NotAuthorised entered {
+    
+    View.push(new LoginSheet{
+        app: root})
+    
+}
+
+Logic.Authentication as auth {}

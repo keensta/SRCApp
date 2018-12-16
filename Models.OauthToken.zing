@@ -1,0 +1,5 @@
+__editor jsonmodel
+Model.Json {
+    __static_config "o,saccess_token,nexpires_in,smembership_id,stoken_type,serror,serror_description,nrefresh_expires_in,srefresh_token"
+    source: "myJson4.json"
+}

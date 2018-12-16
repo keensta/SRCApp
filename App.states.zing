@@ -1,0 +1,44 @@
+System.Argon.Machine {
+    System.Argon.State {
+        configuration design "{x:0,y:5}"
+        id: 30
+        childMode: 0
+        name: "PreAuth"
+
+
+        transitions: [
+            System.Argon.Transition {
+                time: ``500``
+                condition: ``auth.notAuthorizedState``
+                to: 13
+            },
+            System.Argon.Transition {
+                autoReverse: true
+                condition: ``auth.authorizedState``
+                to: 14
+            }
+]
+    }
+    System.Argon.State {
+        configuration design "{x:161.699,y:4.73438}"
+        id: 13
+        childMode: 0
+        name: "NotAuthorised"
+
+
+        transitions: [
+            System.Argon.Transition {
+                condition: ``auth.authorizedState``
+                to: 14
+            }
+]
+    }
+    System.Argon.State {
+        configuration design "{x:0,y:175.766}"
+        id: 14
+        childMode: 0
+        name: "Authorised"
+
+
+    }
+}

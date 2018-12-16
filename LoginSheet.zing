@@ -1,0 +1,19 @@
+Rectangle as root {
+    color: #white
+    
+    property App app
+    
+    Apple.NavigationBar {
+        anchor width
+        title: "Login"
+    }
+    
+    Apple.Button {
+        anchor center
+        label: "Login to bungie.net?"
+        on activated {
+            root.app.auth.getAuthCode()
+        }
+    }
+    
+}

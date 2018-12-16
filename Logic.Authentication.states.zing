@@ -1,0 +1,104 @@
+
+System.Argon.Machine {
+    System.Argon.State {
+        name: "Init"
+
+
+        id: 1
+        transitions: [
+            System.Argon.Transition {
+                trigger: ``root.initComplete()``
+                autoReverse: false
+                to: 5
+            }
+]
+    }
+     System.Argon.State {
+         configuration design "{x:160,y:0}"
+         childMode: 1
+
+
+         id: 5
+         System.Argon.State {
+             id: 6
+             System.Argon.State {
+                 name: "PreAuth"
+
+
+                 id: 2
+                 transitions: [
+                     System.Argon.Transition {
+                         trigger: ``root.authorizationInvalid()``
+                         to: 3
+                     },
+                     System.Argon.Transition {
+                         trigger: ``root.authorizationIsValid()``
+                         to: 4
+                     }
+             ]
+             }
+             System.Argon.State {
+                 configuration design "{x:75.265,y:137.043}"
+                 name: "Authorized"
+
+
+                 id: 4
+                 transitions: [
+                     System.Argon.Transition {
+                         trigger: ``root.authorizationInvalid()``
+                         to: 3
+                     }
+             ]
+             }
+             System.Argon.State {
+                 configuration design "{x:179.178,y:0}"
+                 name: "NotAuthorized"
+
+
+                 id: 3
+                 transitions: [
+                     System.Argon.Transition {
+                         trigger: ``root.authorizationIsValid()``
+                         to: 4
+                     }
+             ]
+             }
+         }
+         System.Argon.State {
+             id: 7
+             System.Argon.State {
+                 configuration design "{x:0,y:134.013}"
+                 name: "Ready"
+             
+             
+                 id: 9
+                 transitions: [
+                     System.Argon.Transition {
+                         trigger: ``root.authorizationInvalid()``
+                         to: 8
+                     }
+             ]
+             }
+             System.Argon.State {
+                 name: "IgnoreBuildAuth"
+                 id: 8
+                 transitions: [
+                     System.Argon.Transition {
+                         trigger: ``root.readyForAuth``
+                         to: 9
+                     }
+]
+             }
+
+         }
+     }
+    System.Argon.State {
+        configuration design "{x:859.178,y:80.4292}"
+        id: 10
+    }
+}
+System.Argon.Machine {
+    System.Argon.State {
+        id: 11
+    }
+}

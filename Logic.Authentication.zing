@@ -1,0 +1,564 @@
+Item as root {
+    
+    event initComplete
+    
+    enum Token {
+        case Refresh
+        case Access
+    }
+    
+    enum JsonToken {
+        case FromEndpoint
+        case FromGetSetting
+    }
+    
+    property String tokenSettingReference: bungieMembershipId+"OauthToken"
+    
+    
+    // Register your app to get an API key, client ID and Client Secret at https://www.bungie.net/en/Application
+    // applicationUrlScheme is the redirect e.g. for mydestinyapp//: redirect it would be 'mydestinyapp'
+    // Ensure you chose a 'confidential' client
+    property String apiKey: "99a27aeb0ba740f0b020b4d02e47504f"
+    property String clientId: "25678"
+    property String clientSecret: "-QAZ3JtTu3Kp2jr3bg9XbWnJChSj-ET9ZhQ2Iy2pYbc"
+    property String applicationUrlScheme: "scrapp"
+    
+    // App authorization URL can be see on the page you create for your app
+    property String authorizationUrl: "https://www.bungie.net/en/oauth/authorize?client_id="+clientId+"&response_type=code"
+    
+    // Enusure your app has the following scope permissions on bungie.net
+    // 1. Read your Destiny vault and character inventory.
+    // 2. Read your Destiny vendor and advisor information.
+    // 3. Move or equip Destiny gear and other items.
+    
+    // Determine if app is running on iOS (Use shared safari view) or Android (Redirect to sytem browser)
+    property Bool isAndroid: false
+    // isAndroid@device(Android): true
+    
+    // Should this app use a state code when authorizing an account
+    property Bool useStateCode
+    
+    
+    //--------------------------
+    // Properties to share what state this element is in
+    property Bool notAuthorizedState: @NotAuthorized
+    property Bool authorizedState: @Authorized
+    
+    property Int membershipType
+    property String displayName
+    property String membershipId
+    property String bungieMembershipId
+    property Json bungieAccounts
+    
+    
+    
+    // events
+    
+    // Used when both refresh and access tokens are valid
+    event authorizationIsValid
+    
+    // Used when authorization has failed at a point where the only solution it to re-authorize the app
+    event authorizationInvalid
+    
+    event readyForAuth
+    
+    
+    // All endpoints should use this to get an authorised Http.Request
+    async function getAuthRequest()->Http.Request {
+        
+        await internal._buildAuth()
+        
+        return internal.authRequest
+    }
+    
+    function clearLoginData() {
+        System.log("clear login data")
+        membershipType = 0
+        displayName = ""
+        membershipId = ""
+        bungieMembershipId = ""
+        bungieAccounts = null
+        internal.oauthToken = null
+        Http.Request req
+        internal.authRequest = req
+    }
+    
+    function deleteAllLoginData() {
+        System.log("deleting all data")
+        clearLoginData()
+        System.saveSetting("bungieAccounts", "")
+        
+        System.saveSetting("membershipType", "")
+        
+        System.saveSetting("displayName", "")
+        
+        System.saveSetting("membershipId", "")
+        
+        System.saveSetting("bungieMembershipId", "")
+        
+        System.saveSetting(root.tokenSettingReference, "")
+    }
+    
+    
+    
+    Item as internal {
+        property String stateCode
+        property App.Type.OauthToken oauthToken
+        property Http.Request authRequest
+        
+        
+        
+        function loadBungieUser() {
+            root.bungieAccounts = Json.parse(System.getSetting("bungieAccounts"))
+            
+            root.membershipType = Int(System.getSetting("membershipType").toNumber())
+            
+            root.displayName = System.getSetting("displayName")
+            
+            root.membershipId = System.getSetting("membershipId")
+            
+            root.bungieMembershipId = System.getSetting("bungieMembershipId")
+            
+        }
+        
+        
+        function convertTokenToJson(App.Type.OauthToken token)->Json {
+            System.log("orig", token.createdAt, token.createdAt.toISOString())
+            var j = {
+                createdAt: token.createdAt.toISOString(),
+                expires_in: token.expires_in,
+                token_type: token.token_type,
+                access_token: token.access_token,
+                refresh_expires_in: token.refresh_expires_in,
+                refresh_token: token.refresh_token
+                
+            }
+            
+            return j
+        }
+        
+        function convertJsonToToken(Json json, Authentication.JsonToken tokenType)->App.Type.OauthToken {
+            
+            var model = new Models.OauthToken {}
+            model.load(json)
+            var data = model.data
+            
+            var newToken = new App.Type.OauthToken {
+                expires_in: Int(data.expires_in)
+                access_token: data.access_token
+                token_type: data.token_type
+                refresh_expires_in: Int(data.refresh_expires_in)
+                refresh_token: data.refresh_token
+            }
+            if tokenType == Authentication.JsonToken.FromGetSetting {
+                newToken.createdAt = DateTime.parseISOString(String(json.createdAt))
+            }
+            
+            return newToken
+        }
+        
+        
+        
+        function processAccessAndRefreshTokens(Json j, Authentication.JsonToken tokenType) {
+            
+            oauthToken = convertJsonToToken(j, tokenType)
+            
+            saveTokens()
+            
+        }
+        
+        
+        
+        function saveTokens() {
+            
+            System.saveSetting(root.tokenSettingReference, Json.stringify(convertTokenToJson(internal.oauthToken)))
+        }
+        
+        function loadTokens() {
+            
+            internal.oauthToken = convertJsonToToken(Json.parse(System.getSetting(root.tokenSettingReference)), Authentication.JsonToken.FromGetSetting)
+            
+        }
+        
+        
+        // Property to ensure only one _buildAuth runs to completion at a time
+        property Bool buildAuthBusy
+        
+        function accessTokenIsValidJson(Json jsonToken)->Bool {
+            var m = new Models.OauthToken {}
+            m.load(jsonToken)
+            var d = m.data
+            
+            if d.access_token != "" &&
+            d.expires_in != 0 &&
+            d.refresh_expires_in != 0 &&
+            d.refresh_token != "" {
+                System.log("token was valid Json")
+                return true
+            } else {
+                return false
+            }
+        }
+        
+        async function _buildAuth() {
+            System.log("buildAuth")
+            // if another _buildAuth is running wait here till it finishes
+            while(buildAuthBusy) {
+                // System.log("auth busy")
+                 
+                // If while waiting the app logs out return right away
+                if @IgnoreBuildAuth {
+                    //
+                    System.log("ignoring auth requests")
+                    return
+                }
+                 
+                await Task.delay(100) 
+            }
+             
+            if @IgnoreBuildAuth {
+                System.log("ignoring _buildAuth")
+                return
+            }
+            
+            buildAuthBusy = true
+            
+            Http.Request auth
+            auth.setHeader("X-API-Key", root.apiKey)
+            
+            loadTokens()
+            
+            // Is refreshToken valid?
+            if !isThisTokenValid(internal.oauthToken, Authentication.Token.Refresh) {
+                
+                // No valid refresh token means the app needs to be re-authorized
+                root.authorizationInvalid()
+                
+                System.log("No valid refresh token")
+                
+                
+                
+            } else {
+                
+                // System.log("refresh was valid")
+                // Is accessToken valid?
+                if !isThisTokenValid(internal.oauthToken, Authentication.Token.Access) {
+                    
+                    // System.log("need new access token")
+                    
+                    Bool stopLoop
+                    
+                    while (true) {
+                        
+                        var j = await getAccessTokenFromRefreshToken(internal.oauthToken)
+                        System.log(j)
+                        var tokenModel = new Models.OauthToken {}
+                        tokenModel.load(j)
+                        
+                        if tokenModel.data.error != "" {
+                            System.log("errror!", j)
+                            if tokenModel.data.error == "invalid_grant"{
+                                System.log("invalid grant")
+                                root.authorizationInvalid()
+                            }
+                            
+                            stopLoop = true
+                        } else {
+                            if accessTokenIsValidJson(j) {
+                                internal.processAccessAndRefreshTokens(j, Authentication.JsonToken.FromEndpoint)
+                                System.log("Got a new access token")
+                                root.getAuthRequest()
+                                stopLoop = true
+                            }
+                            
+                            
+                        }
+                        if stopLoop {
+                            break
+                        }
+                        System.log("_buildAuth waiting")
+                        await Task.delay(1000)
+                    }
+                    
+                } else {
+                    System.log("auth was valid")
+                    auth.setHeader("Authorization", "Bearer "+internal.oauthToken.access_token)
+                    internal.authRequest = auth
+                    root.authorizationIsValid()
+                }
+                
+            }
+            
+            buildAuthBusy = false
+        }
+        
+        // returns true if the token has more than 5 minutes life left
+        function isThisTokenValid(App.Type.OauthToken token, Authentication.Token type)->Bool {
+            
+            var timeNow = DateTime.now()
+            var fiveMinutesInSeconds = 5 * 60
+
+            Int timeLeft
+            
+            if type == Authentication.Token.Refresh {
+
+                timeLeft = Int(token.refresh_expires_in -(timeNow - token.createdAt))
+                
+            } else if type == Authentication.Token.Access {
+
+                timeLeft = Int(token.expires_in -(timeNow - token.createdAt))
+                
+            } else {
+                System.log("ERROR!!!!")
+                return false
+            }
+            
+            if timeLeft > fiveMinutesInSeconds {
+                return true
+            } else {
+                return false
+            }
+        }
+        
+        //-------------------------------------------
+        // END POINTS
+        //-------------------------------------------
+        async function getAccessTokenFromCode(String authCode)->Json {
+            
+            var http = new Http {}
+            
+            Http.Request authRequest
+            
+            authRequest.setHeader("X-API-Key", root.apiKey)
+            
+            String body = "client_id="+root.clientId+"&grant_type=authorization_code&code="+authCode+"&client_secret="+root.clientSecret
+            
+            authRequest.setContent("application/x-www-form-urlencoded", body)
+            
+            var url = "https://www.bungie.net/platform/app/oauth/token/"
+            
+            authRequest.url = url
+            
+            var response = await http.post(authRequest)
+            
+            System.log(response.statusCode)
+            
+            Json bodyJson
+            
+            if (http.status == Http.Status.Error) {
+                
+                System.log("http error getAccessTokenFromCode", response.body)
+                
+                var error = {
+                    "ErrorStatus": response.body,
+                    "Message": ""
+                }
+                bodyJson = error
+                
+            } else {
+                
+                bodyJson = response.bodyJson
+            }
+            
+            System.log(bodyJson)
+            
+            return bodyJson
+            
+        }
+        
+        
+        async function getAccessTokenFromRefreshToken(App.Type.OauthToken token)->Json {
+            System.log("getAccessTokenFromRefreshToken")
+            var http = new Http {}
+            
+            Http.Request authRequest
+            
+            authRequest.setHeader("X-API-Key", root.apiKey)
+            
+            authRequest.setHeader("Authorization", "Basic "+String.base64Encoded(root.clientId+":"+root.clientSecret))
+            
+            String body = "grant_type=refresh_token&refresh_token="+token.refresh_token
+            
+            authRequest.setContent("application/x-www-form-urlencoded", body )
+            
+            var url = "https://www.bungie.net/platform/app/oauth/token/"
+            
+            authRequest.url = url
+            
+            var response = await http.post(authRequest)
+            
+            System.log(response.statusCode)
+            
+            Json bodyJson
+            
+            if (http.status == Http.Status.Error) {
+                
+                System.log("http error getAccessTokenFromRefreshToken", response.body)
+                var error = {
+                    "error": response.body,
+                    "Message": ""
+                }
+                bodyJson = error
+            } else {
+                
+                bodyJson = response.bodyJson
+                
+            }
+            
+            return bodyJson
+        }
+        
+        
+    }
+    
+     async function getPlayer()->Json {
+        System.log("Getting player info")
+        var http = new Http {}
+        
+        Http.Request authRequest
+        authRequest.setHeader("X-API-KEY", root.apiKey)
+        
+        String body = "/User/GetMembershipsById/" + root.bungieMembershipId + "/-1/ "
+        var url = "https://www.bungie.net/Platform/User/GetMembershipsById/" + root.bungieMembershipId + "/-1/ "
+        
+        authRequest.url = url       
+        
+        var response = await http.get(authRequest)
+        System.log("URL:" + authRequest)
+        System.log("Player: " + response.statusCode)
+        Json bodyJson
+        
+        if (http.status == Http.Status.Error) {
+            System.log("http error player", response.body)
+            var error = {
+                "error": response.body,
+                "Message": ""
+            }
+            bodyJson = error
+            } else {  
+                bodyJson = response.bodyJson   
+            }
+                    
+        return bodyJson
+    }
+    
+    
+    async function startAuthFlow(String codeValue, String stateValue) {
+        
+        if stateValue != internal.stateCode {
+            System.log("State error")
+            return
+        }
+        
+        var accessTokenJson = await internal.getAccessTokenFromCode(codeValue)
+        
+        var tokenModel = new Models.OauthToken {}
+        tokenModel.load(accessTokenJson)
+        
+        if tokenModel.data.error != "" {
+            
+            root.authorizationInvalid()
+            
+            System.log("Error getting access token from auth code")
+            
+        } else {
+            
+            var membershipId = tokenModel.data.membership_id
+            root.bungieMembershipId = membershipId
+            
+            System.log(internal.oauthToken.createdAt)
+            internal.processAccessAndRefreshTokens(accessTokenJson, Authentication.JsonToken.FromEndpoint)
+            System.log(internal.oauthToken.createdAt)
+            
+            
+            
+            
+            System.saveSetting("bungieMembershipId", membershipId)
+            
+            root.readyForAuth()
+        }
+        
+    }
+    
+    
+    
+    
+    
+    
+    
+    
+    // Authenticate this app functions
+    
+    function getAuthCode() {
+        
+        // Generate state code
+        var localState = generateStateCode()
+        internal.stateCode = localState
+        
+        // Create full auth Url
+        var authUrl = root.authorizationUrl+"&state="+localState
+        
+        // Android relies on some native code in the main activity to pick up the redirect from the devices browser
+        // if isAndroid {
+        //     System.openUrl(authUrl)
+        // } else {
+        web.navigateTo(authUrl)
+        // }
+        
+    }
+    
+    // Creates a 14 digit random number.
+    function generateStateCode()->String {
+        String code = String(Int(Math.random(10000000000000, 99999999999999)))
+        return code
+    } 
+    
+}
+
+
+on @Init entered {
+    
+    internal.loadBungieUser()
+    
+    // Check registered app details from bungie.net exist
+    
+    if ( root.apiKey != "" && root.clientId != "" && root.clientSecret != "" && root.applicationUrlScheme != "" ) {
+        root.initComplete()
+    } else {
+        System.log("Missing apiKey, client_id, client_secret and application URL scheme")
+    }
+    
+    
+    
+}
+
+// Let's get this party started
+on @PreAuth entered {
+    
+    root.readyForAuth()
+    
+}
+
+on @Ready entered {
+    internal._buildAuth()
+}
+
+on @NotAuthorized entered {
+    root.deleteAllLoginData() 
+}
+
+
+WebDialog as web {
+    applicationUrlScheme: root.applicationUrlScheme
+    
+    on applicationUrlRequested(req) {
+        // System.log("The code is:", req.parameter("code"), req.parameter("state"))
+        
+        var codeValue = req.parameter("code")
+        var stateValue = req.parameter("state")
+        
+        root.startAuthFlow(codeValue, stateValue)
+        close()
+    }
+    
+}

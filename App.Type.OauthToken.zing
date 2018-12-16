@@ -1,0 +1,12 @@
+Object {
+    property String token_type
+    
+    property DateTime createdAt: DateTime.now()
+    
+    property Int expires_in
+    property String access_token
+    
+    property Int refresh_expires_in
+    property String refresh_token
+    
+}
